@@ -1,0 +1,200 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Criação do cluster EKS com Role e configurações de rede
+
+Parameters:
+  ClusterName:
+    Type: String
+    Description: Nome do cluster EKS
+
+  KubernetesVersion:
+    Type: String
+    AllowedValues: ['1.31', '1.32', '1.33']  # ATUALIZE AQUI conforme necessário
+    Description: Versão do Kubernetes permitida para o cluster EKS
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: ID da VPC onde o cluster será criado
+
+  SubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: Lista de Subnet IDs (privadas)
+
+  PrimarySecurityGroupId:
+    Type: List<AWS::EC2::SecurityGroup::Id>
+    Description: SG principal
+
+  TagENV:
+    Type: String
+    AllowedValues: ['dev']
+
+  TagCC:
+    Type: String
+    AllowedValues:
+      # - 'TAGS add aqui'
+
+  TagVertical:
+    Type: String
+    AllowedValues: ['ti', 'produtos','cambio','banif','cadastro','bbnk','comercial','compliance','consignado','corporate','credito','formalizacao','juridico','marketing','mis','ouvidoria','seguranca']
+
+  TagServico:
+    Type: String
+    AllowedValues: ['eks']
+
+  TagTexto:
+    Type: String
+    AllowedValues: ['eks']
+
+Conditions:   
+  UseAL3: !Or
+    - !Equals [!Ref KubernetesVersion, "1.33"]
+    - !Equals [!Ref KubernetesVersion, "1.34"]
+
+Resources:
+  IAMPoliciesStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: # <"endereço do S3 aonde o recuros ta alocado">
+      Parameters:
+        ClusterName: !Ref ClusterName  # ou defina como quiser
+
+  EKSClusterRole:
+    Type: AWS::IAM::Role
+    DependsOn: IAMPoliciesStack
+    Properties:
+      RoleName: !Sub "EKSClusterRole-${ClusterName}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: [eks.amazonaws.com]
+            Action: [sts:AssumeRole]
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
+        - arn:aws:iam::aws:policy/AmazonEKSServicePolicy
+        - !GetAtt IAMPoliciesStack.Outputs.Policy1Arn
+        - !GetAtt IAMPoliciesStack.Outputs.Policy2Arn
+      Tags:
+        - Key: Name
+          Value: !Sub "EKSClusterRole-${ClusterName}"
+
+  ClusterSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SG principal do cluster
+      VpcId: !Ref VpcId
+
+  AdditionalSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SG adicional do cluster
+      VpcId: !Ref VpcId
+
+  NodeGroupRole:
+    Type: AWS::IAM::Role
+    DependsOn: EKSCluster
+    Properties:
+      RoleName: !Sub "EKSNodeGroupRole-${ClusterName}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+        - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+        - !GetAtt IAMPoliciesStack.Outputs.Policy3Arn
+        - !GetAtt IAMPoliciesStack.Outputs.Policy4Arn
+        - !GetAtt IAMPoliciesStack.Outputs.Policy5Arn
+        - !GetAtt IAMPoliciesStack.Outputs.Policy6Arn
+
+  EKSCluster:
+    Type: AWS::EKS::Cluster
+    DependsOn: EKSClusterRole
+    DeletionPolicy: Retain
+    Properties:
+      Name: !Ref ClusterName
+      Version: !Ref KubernetesVersion
+      RoleArn: !GetAtt EKSClusterRole.Arn
+      ResourcesVpcConfig:
+        SecurityGroupIds:
+          - !Ref ClusterSecurityGroup
+          - !Ref AdditionalSecurityGroup
+        SubnetIds: !Ref SubnetIds
+        EndpointPublicAccess: true
+        EndpointPrivateAccess: true
+      Logging:
+        ClusterLogging:
+          EnabledTypes:
+            - Type: api
+            - Type: audit
+      Tags:
+        - Key: Name
+          Value: !Ref ClusterName
+        - Key: ENV
+          Value: !Ref TagENV
+        - Key: CC
+          Value: !Select [0, !Split [' - ', !Ref TagCC]]
+        - Key: Vertical
+          Value: !Ref TagVertical
+        - Key: Servico
+          Value: !Ref TagServico
+        - Key: Contexto
+          Value: !Ref TagTexto
+
+  EKSNodeGroup:
+    Type: AWS::EKS::Nodegroup
+    DependsOn: EKSCluster
+    Properties:
+      ClusterName: !Ref ClusterName
+      NodegroupName: !Sub "${ClusterName}-NodeGroup"
+      NodeRole: !GetAtt NodeGroupRole.Arn
+      Subnets: !Ref SubnetIds
+      ScalingConfig:
+        MinSize: 4
+        MaxSize: 8
+        DesiredSize: 4
+      InstanceTypes:
+        - t3a.xlarge
+      AmiType: !If [UseAL3, AL2023_x86_64_STANDARD, AL2_x86_64]
+      DiskSize: 20
+      Labels:
+        role: worker
+      Tags:
+        Name: !Sub "${ClusterName}-ng"
+        ENV: !Ref TagENV
+        CC: !Select [0, !Split [' - ', !Ref TagCC]]
+        Vertical: !Ref TagVertical
+        Servico: !Ref TagServico
+        Contexto: !Ref TagTexto
+
+  EKSAddonsStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: EKSCluster
+    Properties:
+      TemplateURL: !Sub # <"endereço do S3 aonde o recuros ta alocado">
+      Parameters:
+        ClusterName: !Ref ClusterName
+        KubernetesVersion: !Ref KubernetesVersion
+
+Outputs:
+  ClusterName:
+    Description: Nome do Cluster EKS
+    Value: !Ref ClusterName
+
+  ClusterARN:
+    Description: ARN do Cluster criado
+    Value: !GetAtt EKSCluster.Arn
+
+  ClusterRoleARN:
+    Description: ARN da Role associada ao Cluster
+    Value: !GetAtt EKSClusterRole.Arn
+
+  NodeGroupName:
+    Description: Nome do NodeGroup criado
+    Value: !Ref EKSNodeGroup

@@ -1,0 +1,74 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Mapeamento de versões de Add-ons EKS com base na versão do Kubernetes
+
+Parameters:
+  ClusterName:
+    Type: String
+    Description: Nome do Cluster EKS
+
+  KubernetesVersion:
+    Type: String
+    AllowedValues: ['1.31', '1.32', '1.33']  # ATUALIZE AQUI conforme necessário
+    Description: Versão do Kubernetes permitida para o cluster EKS
+
+Mappings:
+  AddonVersions:
+    "1.31":
+      VpcCni: "v1.20.0-eksbuild.1"
+      CoreDNS: "v1.11.3-eksbuild.1"
+      KubeProxy: "v1.31.10-eksbuild.2"
+      EbsCsi: "v1.46.0-eksbuild.1"
+    "1.32":
+      VpcCni: "v1.20.0-eksbuild.1"
+      CoreDNS: "v1.11.4-eksbuild.2"
+      KubeProxy: "v1.31.10-eksbuild.2"
+      EbsCsi: "v1.46.0-eksbuild.1"
+    "1.33":
+      VpcCni: "v1.20.0-eksbuild.1"
+      CoreDNS: "v1.12.2-eksbuild.4"
+      KubeProxy: "v1.33.0-eksbuild.2"
+      EbsCsi: "v1.46.0-eksbuild.1"
+Conditions:
+  IsVersionMapped: !Not [!Equals [!FindInMap [AddonVersions, !Ref KubernetesVersion, VpcCni], ""]]
+
+Resources:
+  VpcCniAddon:
+    Type: AWS::EKS::Addon
+    Condition: IsVersionMapped
+    Properties:
+      AddonName: vpc-cni
+      ClusterName: !Ref ClusterName
+      AddonVersion: !FindInMap [AddonVersions, !Ref KubernetesVersion, VpcCni]
+      ResolveConflicts: OVERWRITE
+
+  CoreDnsAddon:
+    Type: AWS::EKS::Addon
+    Condition: IsVersionMapped
+    Properties:
+      AddonName: coredns
+      ClusterName: !Ref ClusterName
+      AddonVersion: !FindInMap [AddonVersions, !Ref KubernetesVersion, CoreDNS]
+      ResolveConflicts: OVERWRITE
+
+  KubeProxyAddon:
+    Type: AWS::EKS::Addon
+    Condition: IsVersionMapped
+    Properties:
+      AddonName: kube-proxy
+      ClusterName: !Ref ClusterName
+      AddonVersion: !FindInMap [AddonVersions, !Ref KubernetesVersion, KubeProxy]
+      ResolveConflicts: OVERWRITE
+
+  EbsCsiAddon:
+    Type: AWS::EKS::Addon
+    Condition: IsVersionMapped
+    Properties:
+      AddonName: aws-ebs-csi-driver
+      ClusterName: !Ref ClusterName
+      AddonVersion: !FindInMap [AddonVersions, !Ref KubernetesVersion, EbsCsi]
+      ResolveConflicts: OVERWRITE
+
+Outputs:
+  AddonsStatus:
+    Description: Add-ons configurados com sucesso
+    Value: !Sub "Add-ons aplicados ao cluster ${ClusterName}"
