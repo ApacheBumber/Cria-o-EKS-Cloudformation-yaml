@@ -34,7 +34,7 @@ Parameters:
 
   TagVertical:
     Type: String
-    AllowedValues: ['ti', 'produtos','cambio','banif','cadastro','bbnk','comercial','compliance','consignado','corporate','credito','formalizacao','juridico','marketing','mis','ouvidoria','seguranca']
+    AllowedValues: ['ti', ]
 
   TagServico:
     Type: String
