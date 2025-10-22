@@ -1,0 +1,67 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Launch Template para NodeGroup EKS com AMI condicional e InstanceType t3a.xlarge
+
+Parameters:
+  ClusterName:
+    Type: String
+    Description: Nome do cluster EKS
+
+  KubernetesVersion:
+    Type: String
+    Description: Versão do Kubernetes do cluster EKS
+
+  UseAL2023:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "true"
+    Description: Define se usa Amazon Linux 2023 (AL2023) baseado na versão do Kubernetes
+
+  FallbackAMI:
+    Type: AWS::EC2::Image::Id
+    Description: AMI fallback caso SSM não funcione
+    
+  NodeSecurityGroup:                # 👈 novo parâmetro
+    Type: AWS::EC2::SecurityGroup::Id
+
+Conditions:
+  IsAL2023: !Equals [!Ref UseAL2023, "true"]
+
+Resources:
+  EKSLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: !Sub "${ClusterName}-lt"
+      LaunchTemplateData:
+        InstanceType: t3a.xlarge
+        ImageId: !If
+          - IsAL2023
+          - !Sub "{{resolve:ssm:/aws/service/eks/optimized-ami/${KubernetesVersion}/amazon-linux-2023/x86_64/standard/recommended/image_id}}"
+          - !Ref FallbackAMI
+        NetworkInterfaces:
+          - AssociatePublicIpAddress: false
+            DeviceIndex: 0
+            Groups:
+              - !Ref NodeSecurityGroup
+
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvda
+            Ebs:
+              VolumeSize: 60
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Name
+                Value: !Sub "${ClusterName}-ng"
+              - Key: Cluster
+                Value: !Ref ClusterName
+              - Key: ManagedBy
+                Value: CloudFormation
+
+Outputs:
+  LaunchTemplateId:
+    Description: ID do Launch Template
+    Value: !Ref EKSLaunchTemplate
+
+  LaunchTemplateVersion:
+    Description: Última versão do Launch Template
+    Value: !GetAtt EKSLaunchTemplate.LatestVersionNumber
