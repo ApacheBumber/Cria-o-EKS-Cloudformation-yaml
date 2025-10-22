@@ -29,12 +29,13 @@ Parameters:
 
   TagCC:
     Type: String
-    AllowedValues:
-      # - 'TAGS add aqui'
+    AllowedValues:   👈 Adicionar a tags para centro de custo.
+      - '1111 - Centro de custo'
+
 
   TagVertical:
     Type: String
-    AllowedValues: ['ti', ]
+    AllowedValues: ['ti']   # 👈 Adicionar tags de indentificação da area
 
   TagServico:
     Type: String
@@ -45,15 +46,16 @@ Parameters:
     AllowedValues: ['eks']
 
 Conditions:   
-  UseAL3: !Or
+  UseAL2023: !Or
     - !Equals [!Ref KubernetesVersion, "1.33"]
     - !Equals [!Ref KubernetesVersion, "1.34"]
+    - !Equals [!Ref KubernetesVersion, "1.35"]  # pode adicionar novas versões futuramente
 
 Resources:
   IAMPoliciesStack:
     Type: AWS::CloudFormation::Stack
     Properties:
-      TemplateURL: # <"endereço do S3 aonde o recuros ta alocado">
+      TemplateURL: "https://***.s3.us-east-1.amazonaws.com/path"  # 👈 Adicionar a URLtemplate aonde ta armazenado os templates EKS no s3
       Parameters:
         ClusterName: !Ref ClusterName  # ou defina como quiser
 
@@ -78,6 +80,7 @@ Resources:
         - Key: Name
           Value: !Sub "EKSClusterRole-${ClusterName}"
 
+  # Security Groups
   ClusterSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
@@ -90,6 +93,7 @@ Resources:
       GroupDescription: SG adicional do cluster
       VpcId: !Ref VpcId
 
+  # Role do NodeGroup
   NodeGroupRole:
     Type: AWS::IAM::Role
     DependsOn: EKSCluster
@@ -100,10 +104,8 @@ Resources:
         Statement:
           - Effect: Allow
             Principal:
-              Service:
-                - ec2.amazonaws.com
-            Action:
-              - sts:AssumeRole
+              Service: [ec2.amazonaws.com]
+            Action: [sts:AssumeRole]
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
         - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
@@ -113,6 +115,7 @@ Resources:
         - !GetAtt IAMPoliciesStack.Outputs.Policy5Arn
         - !GetAtt IAMPoliciesStack.Outputs.Policy6Arn
 
+  # Cluster EKS
   EKSCluster:
     Type: AWS::EKS::Cluster
     DependsOn: EKSClusterRole
@@ -128,6 +131,9 @@ Resources:
         SubnetIds: !Ref SubnetIds
         EndpointPublicAccess: true
         EndpointPrivateAccess: true
+        PublicAccessCidrs:  # 👈 Adicionar todos os Ips publicos para request externos
+        - 172.169.172.169/32
+
       Logging:
         ClusterLogging:
           EnabledTypes:
@@ -147,22 +153,60 @@ Resources:
         - Key: Contexto
           Value: !Ref TagTexto
 
+  # Security Group dos Nodes
+  NodeSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SG para os nodes do EKS
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+      # Permitir que o cluster EKS fale com os nodes
+        - IpProtocol: tcp
+          FromPort: 10250
+          ToPort: 10250
+          SourceSecurityGroupId: !Ref ClusterSecurityGroup
+      # DNS interno (CoreDNS)
+        - IpProtocol: udp
+          FromPort: 53
+          ToPort: 53
+          SourceSecurityGroupId: !Ref ClusterSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 53
+          ToPort: 53
+          SourceSecurityGroupId: !Ref ClusterSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+
+  # Stack externo do LaunchTemplate
+  EKSLaunchTemplateStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: "https://***.s3.us-east-1.amazonaws.com/path"  # 👈 Adicionar a URLtemplate aonde ta armazenado os templates EKS no s3
+      Parameters:
+        ClusterName: !Ref ClusterName
+        KubernetesVersion: !Ref KubernetesVersion
+        UseAL2023: !If [UseAL2023, "true", "false"]
+        FallbackAMI: ami-0b3a73487ec93ea0b 👈 adicionar a ami desejada para o Fallback
+        NodeSecurityGroup: !Ref NodeSecurityGroup   # 👈 AGORA está garantido que o recurso já existe
+
+  # NodeGroup usando LaunchTemplate
   EKSNodeGroup:
     Type: AWS::EKS::Nodegroup
-    DependsOn: EKSCluster
+    DependsOn: EKSCluster   # apenas o cluster precisa existir antes
     Properties:
       ClusterName: !Ref ClusterName
       NodegroupName: !Sub "${ClusterName}-NodeGroup"
       NodeRole: !GetAtt NodeGroupRole.Arn
       Subnets: !Ref SubnetIds
       ScalingConfig:
-        MinSize: 4
-        MaxSize: 8
-        DesiredSize: 4
-      InstanceTypes:
-        - t3a.xlarge
-      AmiType: !If [UseAL3, AL2023_x86_64_STANDARD, AL2_x86_64]
-      DiskSize: 20
+        MinSize: 1
+        MaxSize: 2
+        DesiredSize: 1
+      LaunchTemplate:
+        Id: !GetAtt EKSLaunchTemplateStack.Outputs.LaunchTemplateId
+        Version: !GetAtt EKSLaunchTemplateStack.Outputs.LaunchTemplateVersion
       Labels:
         role: worker
       Tags:
@@ -173,11 +217,12 @@ Resources:
         Servico: !Ref TagServico
         Contexto: !Ref TagTexto
 
+  # Stack de Addons
   EKSAddonsStack:
     Type: AWS::CloudFormation::Stack
     DependsOn: EKSCluster
     Properties:
-      TemplateURL: !Sub # <"endereço do S3 aonde o recuros ta alocado">
+      TemplateURL: "https://***.s3.us-east-1.amazonaws.com/path"  # 👈 Adicionar a URLtemplate aonde ta armazenado os templates EKS no s3
       Parameters:
         ClusterName: !Ref ClusterName
         KubernetesVersion: !Ref KubernetesVersion
